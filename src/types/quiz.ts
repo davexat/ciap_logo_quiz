@@ -2,9 +2,7 @@ export interface Language {
   id: string;
   name: string;
   displayName: string;
-  category?: string;
-  brandColor: string;
-  svg: string; // Valid scalable SVG markup
+  logo: string; // ponytail: path placeholder for svg file in src/data/logos, e.g. src/data/logos/python.svg
 }
 
 export interface Question {

@@ -1,6 +1,0 @@
-{
-  "name": "Programming Logo Quiz",
-  "description": "Juego de quiz interactivo y dinámico para poner a prueba tu capacidad de reconocer 16 lenguajes de programación por sus logotipos oficiales.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

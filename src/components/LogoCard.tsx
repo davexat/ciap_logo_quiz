@@ -81,9 +81,10 @@ export const LogoCard: React.FC<LogoCardProps> = ({
 
       {/* Large Crisp Logo */}
       <div className="w-20 h-20 sm:w-28 sm:h-28 flex items-center justify-center my-2 p-1.5 transition-transform duration-200 group-hover:scale-105">
-        <div
-          className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full [&>svg]:max-h-full [&>svg]:object-contain drop-shadow-md"
-          dangerouslySetInnerHTML={{ __html: language.svg }}
+        <img
+          src={language.logo}
+          alt={language.displayName}
+          className="w-full h-full object-contain drop-shadow-md"
         />
       </div>
 
