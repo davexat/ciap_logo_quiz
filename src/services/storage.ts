@@ -1,77 +1,78 @@
 import { GameRecord, LeaderboardEntry } from '../types/quiz';
+import { TOTAL_ROUNDS } from '../data/languages';
 
-const STORAGE_KEY = 'programming_logo_quiz_records_v1';
+const STORAGE_KEY = 'programming_logo_quiz_records_v4';
 
-// Seed entries mirroring the prompt's examples (adapted to the 90s limit)
+// Seed entries for the 15-question, 3-level round (easy x5, medium x5, hard x5)
 const INITIAL_RECORDS: GameRecord[] = [
   {
     id: 'seed-1',
     username: 'Carlos',
-    contactNumber: '+34 612 345 678',
     completed: true,
-    maxRound: 16,
-    totalRounds: 16,
-    totalTime: 62, // 01:02
-    totalTimeFormatted: '01:02',
+    maxRound: 15,
+    totalRounds: 15,
+    levelReached: 'hard',
+    totalTime: 73, // 01:13
+    totalTimeFormatted: '01:13',
     livesRemaining: 3,
     startedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-    finishedAt: new Date(Date.now() - 86400000 * 2 + 62000).toISOString(),
+    finishedAt: new Date(Date.now() - 86400000 * 2 + 73000).toISOString(),
     reason: 'completed'
   },
   {
     id: 'seed-2',
     username: 'Ana',
-    contactNumber: '+52 55 9876 5432',
     completed: true,
-    maxRound: 16,
-    totalRounds: 16,
-    totalTime: 78, // 01:18
-    totalTimeFormatted: '01:18',
+    maxRound: 15,
+    totalRounds: 15,
+    levelReached: 'hard',
+    totalTime: 88, // 01:28
+    totalTimeFormatted: '01:28',
     livesRemaining: 2,
     startedAt: new Date(Date.now() - 86400000).toISOString(),
-    finishedAt: new Date(Date.now() - 86400000 + 78000).toISOString(),
+    finishedAt: new Date(Date.now() - 86400000 + 88000).toISOString(),
     reason: 'completed'
   },
   {
     id: 'seed-3',
     username: 'Pedro',
-    contactNumber: '+54 9 11 2345 6789',
     completed: false,
-    maxRound: 11,
-    totalRounds: 16,
-    totalTime: 58, // 00:58
-    totalTimeFormatted: '00:58',
+    maxRound: 12,
+    totalRounds: 15,
+    levelReached: 'hard',
+    totalTime: 64, // 01:04
+    totalTimeFormatted: '01:04',
     livesRemaining: 0,
     startedAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-    finishedAt: new Date(Date.now() - 3600000 * 12 + 58000).toISOString(),
+    finishedAt: new Date(Date.now() - 3600000 * 12 + 64000).toISOString(),
     reason: 'lives_depleted'
   },
   {
     id: 'seed-4',
     username: 'Angel',
-    contactNumber: '+57 300 123 4567',
     completed: false,
-    maxRound: 11,
-    totalRounds: 16,
-    totalTime: 75, // 01:15
-    totalTimeFormatted: '01:15',
+    maxRound: 8,
+    totalRounds: 15,
+    levelReached: 'medium',
+    totalTime: 49, // 00:49
+    totalTimeFormatted: '00:49',
     livesRemaining: 0,
     startedAt: new Date(Date.now() - 3600000 * 6).toISOString(),
-    finishedAt: new Date(Date.now() - 3600000 * 6 + 75000).toISOString(),
+    finishedAt: new Date(Date.now() - 3600000 * 6 + 49000).toISOString(),
     reason: 'lives_depleted'
   },
   {
     id: 'seed-5',
     username: 'María',
-    contactNumber: '+56 9 8765 4321',
     completed: false,
-    maxRound: 7,
-    totalRounds: 16,
-    totalTime: 44, // 00:44
-    totalTimeFormatted: '00:44',
+    maxRound: 4,
+    totalRounds: 15,
+    levelReached: 'easy',
+    totalTime: 27, // 00:27
+    totalTimeFormatted: '00:27',
     livesRemaining: 0,
     startedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    finishedAt: new Date(Date.now() - 3600000 * 2 + 44000).toISOString(),
+    finishedAt: new Date(Date.now() - 3600000 * 2 + 27000).toISOString(),
     reason: 'lives_depleted'
   }
 ];
@@ -105,10 +106,10 @@ export function saveGameRecord(record: GameRecord): void {
 }
 
 /**
- * Returns formatted leaderboard entries strictly respecting privacy rules:
- * - NEVER includes contactNumber!
+ * Returns formatted leaderboard entries, ordered by:
+ * - Records hold no personal data beyond the username.
  * - Ordered by:
- *   1. Completed games (16/16) first:
+ *   1. Completed games (15/15) first:
  *      - By livesRemaining descending
  *      - By totalTime ascending (faster is better)
  *   2. Non-completed games:
@@ -116,9 +117,12 @@ export function saveGameRecord(record: GameRecord): void {
  *      - By totalTime ascending
  */
 export function getLeaderboard(currentUsername?: string): LeaderboardEntry[] {
-  const records = getStoredRecords();
+  return sortRecords(getStoredRecords()).map((rec) => toEntry(rec, rec.username.toLowerCase() === (currentUsername ?? '').toLowerCase() && !!currentUsername));
+}
 
-  const sorted = [...records].sort((a, b) => {
+/** Shared rank order (remote and mock boards rank identically). */
+export function sortRecords(records: GameRecord[]): GameRecord[] {
+  return [...records].sort((a, b) => {
     // 1. Both completed
     if (a.completed && b.completed) {
       if (b.livesRemaining !== a.livesRemaining) {
@@ -139,19 +143,23 @@ export function getLeaderboard(currentUsername?: string): LeaderboardEntry[] {
     // Tie-break: faster or longer survival time
     return a.totalTime - b.totalTime;
   });
+}
 
-  return sorted.map((rec) => ({
+/** Single record -> display entry (shared by mock and remote boards). */
+export function toEntry(rec: GameRecord, isCurrentPlayer = false): LeaderboardEntry {
+  return {
     id: rec.id,
     username: rec.username,
     completed: rec.completed,
     maxRound: rec.maxRound,
-    totalRounds: rec.totalRounds || 16,
+    totalRounds: rec.totalRounds || TOTAL_ROUNDS,
+    levelReached: rec.levelReached ?? 'easy',
     totalTime: rec.totalTime,
     totalTimeFormatted: rec.totalTimeFormatted,
     livesRemaining: rec.livesRemaining,
     finishedAt: rec.finishedAt,
-    isCurrentPlayer: currentUsername ? rec.username.toLowerCase() === currentUsername.toLowerCase() : false
-  }));
+    isCurrentPlayer
+  };
 }
 
 export function formatSecondsToMMSS(seconds: number): string {

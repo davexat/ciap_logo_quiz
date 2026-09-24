@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useRef } from 'react';
 import { Player, Question, GameRecord, GameStatus } from './types/quiz';
-import { generateQuizDeck } from './data/languages';
+import { generateRoundDeck, TOTAL_ROUNDS } from './data/languages';
 import { saveGameRecord, formatSecondsToMMSS } from './services/storage';
+import { prefetchBoard, submitScore } from './services/leaderboard';
 import { sound } from './services/audio';
 
 import { Header } from './components/Header';
@@ -23,190 +24,124 @@ export default function App() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [lives, setLives] = useState(3);
-  const [remainingSeconds, setRemainingSeconds] = useState(90);
+  const [wildcardsLeft, setWildcardsLeft] = useState(3);
   const [latestRecord, setLatestRecord] = useState<GameRecord | null>(null);
 
-  // Timing refs
-  const timerIntervalRef = useRef<number | null>(null);
+  // Round refs (no global clock: each question owns its 10s timer)
+  const elapsedRef = useRef(0); // banked seconds from answered questions
+  const wildcardsRef = useRef(3);
   const startTimeRef = useRef<number>(0);
   const gameActiveRef = useRef<boolean>(false);
 
-  // Clear running timer
-  const stopTimer = useCallback(() => {
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-    gameActiveRef.current = false;
-  }, []);
-
-  // Handle Timeout
-  const handleTimeOut = useCallback(() => {
-    if (!gameActiveRef.current) return;
-    stopTimer();
-
-    if (!currentPlayer) return;
-
-    const finishedAt = new Date().toISOString();
-    const record: GameRecord = {
+  // Shared record builder
+  const buildRecord = (
+    completed: boolean,
+    livesLeft: number,
+    reason: 'completed' | 'lives_depleted',
+    atIndex: number
+  ): GameRecord | null => {
+    if (!currentPlayer) return null;
+    const totalTime = elapsedRef.current;
+    return {
       id: `game_${Date.now()}`,
       username: currentPlayer.username,
-      contactNumber: currentPlayer.contactNumber,
-      completed: false,
-      maxRound: currentRoundIndex + 1,
-      totalRounds: 16,
-      totalTime: 90,
-      totalTimeFormatted: '01:30',
-      livesRemaining: lives,
+      completed,
+      maxRound: completed ? TOTAL_ROUNDS : atIndex + 1,
+      totalRounds: TOTAL_ROUNDS,
+      levelReached: questions[atIndex]?.level ?? 'hard',
+      totalTime,
+      totalTimeFormatted: formatSecondsToMMSS(totalTime),
+      livesRemaining: livesLeft,
       startedAt: new Date(startTimeRef.current).toISOString(),
-      finishedAt,
-      reason: 'time_out'
+      finishedAt: new Date().toISOString(),
+      reason
     };
+  };
 
-    saveGameRecord(record);
-    setLatestRecord(record);
-    setGameStatus('TIMEOUT');
-  }, [currentPlayer, currentRoundIndex, lives, stopTimer]);
-
-  // Start a new match
+  // Start a new match: easy x5 -> medium x5 -> hard x5, 3 lives, 3 wildcards
   const handleStartQuiz = (player: Player) => {
-    stopTimer();
+    gameActiveRef.current = false;
     setCurrentPlayer(player);
 
-    const newDeck = generateQuizDeck();
-    setQuestions(newDeck);
+    setQuestions(generateRoundDeck());
     setCurrentRoundIndex(0);
     setLives(3);
-    setRemainingSeconds(90);
+    wildcardsRef.current = 3;
+    setWildcardsLeft(3);
+    elapsedRef.current = 0;
     setLatestRecord(null);
 
-    const now = Date.now();
-    startTimeRef.current = now;
+    startTimeRef.current = Date.now();
     gameActiveRef.current = true;
     setGameStatus('PLAYING');
 
-    // Launch global timer interval
-    timerIntervalRef.current = window.setInterval(() => {
-      setRemainingSeconds((prev) => {
-        if (prev <= 1) {
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    // Warm the leaderboard cache: instant board at game end.
+    void prefetchBoard();
   };
 
-  // Correct answer handler
-  const handleAnswerCorrect = () => {
+  // Correct answer handler (timeSpent reported by the question timer)
+  const handleAnswerCorrect = (timeSpent: number) => {
     if (!gameActiveRef.current) return;
+    elapsedRef.current += timeSpent;
 
     const nextIndex = currentRoundIndex + 1;
 
-    // Check if player has completed all 16 questions!
-    if (nextIndex >= 16) {
-      stopTimer();
-      const elapsedSeconds = Math.min(90, Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000)));
-      const finishedAt = new Date().toISOString();
-
-      if (currentPlayer) {
-        const record: GameRecord = {
-          id: `game_${Date.now()}`,
-          username: currentPlayer.username,
-          contactNumber: currentPlayer.contactNumber,
-          completed: true,
-          maxRound: 16,
-          totalRounds: 16,
-          totalTime: elapsedSeconds,
-          totalTimeFormatted: formatSecondsToMMSS(elapsedSeconds),
-          livesRemaining: lives,
-          startedAt: new Date(startTimeRef.current).toISOString(),
-          finishedAt,
-          reason: 'completed'
-        };
-
+    if (nextIndex >= TOTAL_ROUNDS) {
+      const record = buildRecord(true, lives, 'completed', currentRoundIndex);
+      if (record) {
         saveGameRecord(record);
+        void submitScore(record);
         setLatestRecord(record);
       }
+      gameActiveRef.current = false;
       setGameStatus('SUCCESS');
     } else {
       setCurrentRoundIndex(nextIndex);
     }
   };
 
-  // Incorrect answer handler
-  const handleAnswerIncorrect = (lostIndex: number) => {
+  // Incorrect answer handler (wrong pick or per-question timeout)
+  const handleAnswerIncorrect = (lostIndex: number, timeSpent: number) => {
     if (!gameActiveRef.current) return;
+    elapsedRef.current += timeSpent;
 
     const newLives = lives - 1;
     setLives(newLives);
 
+    const nextIndex = currentRoundIndex + 1;
+
     if (newLives <= 0) {
-      // Game Over: lives depleted
-      stopTimer();
-      const elapsedSeconds = Math.min(90, Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000)));
-      const finishedAt = new Date().toISOString();
-
-      if (currentPlayer) {
-        const record: GameRecord = {
-          id: `game_${Date.now()}`,
-          username: currentPlayer.username,
-          contactNumber: currentPlayer.contactNumber,
-          completed: false,
-          maxRound: currentRoundIndex + 1,
-          totalRounds: 16,
-          totalTime: elapsedSeconds,
-          totalTimeFormatted: formatSecondsToMMSS(elapsedSeconds),
-          livesRemaining: 0,
-          startedAt: new Date(startTimeRef.current).toISOString(),
-          finishedAt,
-          reason: 'lives_depleted'
-        };
-
+      const record = buildRecord(false, 0, 'lives_depleted', currentRoundIndex);
+      if (record) {
         saveGameRecord(record);
+        void submitScore(record);
         setLatestRecord(record);
       }
+      gameActiveRef.current = false;
       setGameStatus('GAMEOVER');
-    } else {
-      // Advance to next question after losing life
-      const nextIndex = currentRoundIndex + 1;
-      if (nextIndex >= 16) {
-        // Player reached 16 questions even with some mistakes
-        stopTimer();
-        const elapsedSeconds = Math.min(90, Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000)));
-        const finishedAt = new Date().toISOString();
-
-        if (currentPlayer) {
-          const record: GameRecord = {
-            id: `game_${Date.now()}`,
-            username: currentPlayer.username,
-            contactNumber: currentPlayer.contactNumber,
-            completed: true,
-            maxRound: 16,
-            totalRounds: 16,
-            totalTime: elapsedSeconds,
-            totalTimeFormatted: formatSecondsToMMSS(elapsedSeconds),
-            livesRemaining: newLives,
-            startedAt: new Date(startTimeRef.current).toISOString(),
-            finishedAt,
-            reason: 'completed'
-          };
-
-          saveGameRecord(record);
-          setLatestRecord(record);
-        }
-        setGameStatus('SUCCESS');
-      } else {
-        setCurrentRoundIndex(nextIndex);
+    } else if (nextIndex >= TOTAL_ROUNDS) {
+      // Survived all 15 questions with lives to spare
+      const record = buildRecord(true, newLives, 'completed', currentRoundIndex);
+      if (record) {
+        saveGameRecord(record);
+        void submitScore(record);
+        setLatestRecord(record);
       }
+      gameActiveRef.current = false;
+      setGameStatus('SUCCESS');
+    } else {
+      setCurrentRoundIndex(nextIndex);
     }
   };
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopTimer();
-    };
-  }, [stopTimer]);
+  // 50:50 wildcard: one use per call, 3 per round (ref-backed, StrictMode-safe)
+  const handleUseWildcard = (): boolean => {
+    if (!gameActiveRef.current || wildcardsRef.current <= 0) return false;
+    wildcardsRef.current -= 1;
+    setWildcardsLeft(wildcardsRef.current);
+    sound.playClick();
+    return true;
+  };
 
   const handleToggleMute = () => {
     const muted = sound.toggleMute();
@@ -222,7 +157,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-full flex flex-col bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white font-sans">
+    <div className="min-h-full flex flex-col bg-void bg-scanlines text-ink font-sans">
       {/* Top Bar Header */}
       <Header
         onOpenLeaderboard={() => setIsLeaderboardOpen(true)}
@@ -247,18 +182,18 @@ export default function App() {
             questions={questions}
             currentRoundIndex={currentRoundIndex}
             lives={lives}
-            remainingSeconds={remainingSeconds}
+            wildcardsLeft={wildcardsLeft}
+            onUseWildcard={handleUseWildcard}
             onAnswerCorrect={handleAnswerCorrect}
             onAnswerIncorrect={handleAnswerIncorrect}
-            onTimeOut={handleTimeOut}
             onQuit={() => {
-              stopTimer();
+              gameActiveRef.current = false;
               setGameStatus('WELCOME');
             }}
           />
         )}
 
-        {(gameStatus === 'SUCCESS' || gameStatus === 'GAMEOVER' || gameStatus === 'TIMEOUT') && latestRecord && (
+        {(gameStatus === 'SUCCESS' || gameStatus === 'GAMEOVER') && latestRecord && (
           <ResultScreen
             record={latestRecord}
             onPlayAgain={handlePlayAgain}
@@ -266,6 +201,13 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* CIAP proprietary footer */}
+      <footer className="w-full border-t border-line bg-void/80">
+        <div className="max-w-5xl mx-auto px-4 py-2.5 text-center font-mono text-[11px] text-dim">
+          $ © CIAP — todos los derechos reservados
+        </div>
+      </footer>
 
       {/* Modals */}
       <LeaderboardModal

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { X, Trophy, ShieldCheck, Heart, Medal, Sparkles } from 'lucide-react';
-import { getLeaderboard } from '../services/storage';
+import React, { useState, useEffect } from 'react';
+import { X, Trophy, Heart, Check } from 'lucide-react';
+import type { LeaderboardEntry } from '../types/quiz';
+import { getBoardForDisplay, getBoardError, type BoardSource } from '../services/leaderboard';
 import { sound } from '../services/audio';
 
 interface LeaderboardModalProps {
@@ -15,10 +16,29 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   currentUsername
 }) => {
   const [filter, setFilter] = useState<'all' | 'completed' | 'uncompleted'>('all');
+  const [board, setBoard] = useState<{ entries: LeaderboardEntry[]; source: BoardSource } | null>(null);
+  const [boardErr, setBoardErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (isOpen) {
+      setBoard(null);
+      setBoardErr(null);
+      getBoardForDisplay(currentUsername).then((b) => {
+        if (alive) {
+          setBoard(b);
+          setBoardErr(getBoardError());
+        }
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, currentUsername]);
 
   if (!isOpen) return null;
 
-  const entries = getLeaderboard(currentUsername);
+  const entries = board?.entries ?? [];
 
   const filteredEntries = entries.filter((entry) => {
     if (filter === 'completed') return entry.completed;
@@ -26,110 +46,97 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
     return true;
   });
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Modal Header */}
-        <div className="p-4 sm:p-6 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
-              <Trophy className="w-5 h-5 text-amber-400" />
-            </div>
-            <div>
-              <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
-                Tabla de Posiciones
-                <span className="text-xs font-normal text-slate-400">· Leaderboard</span>
-              </h2>
-              <p className="text-xs text-slate-400">
-                Mejores marcas registradas por los participantes
-              </p>
-            </div>
-          </div>
+  const filterBtn = (active: boolean) =>
+    `px-3 py-1 font-mono text-xs rounded transition-colors cursor-pointer ${
+      active ? 'bg-signal text-black font-bold' : 'text-dim hover:text-ink'
+    }`;
 
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-void/85 backdrop-blur-sm">
+      <div className="w-full max-w-3xl bg-panel border border-line rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        {/* Title bar */}
+        <div className="px-4 py-2.5 border-b border-line bg-void/60 flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-line" />
+          <span className="w-2.5 h-2.5 rounded-full bg-line" />
+          <span className="w-2.5 h-2.5 rounded-full bg-signal/70" />
+          <span className="font-mono text-xs text-dim ml-2 flex items-center gap-1.5">
+            <Trophy className="w-3.5 h-3.5 text-signal" />
+            $ leaderboard --top
+          </span>
           <button
             onClick={() => {
               sound.playClick();
               onClose();
             }}
-            className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
+            className="ml-auto font-mono text-xs text-dim hover:text-bad transition-colors cursor-pointer"
             aria-label="Cerrar modal"
           >
-            <X className="w-4 h-4" />
+            [x]
           </button>
         </div>
 
-        {/* Privacy Note Banner */}
-        <div className="bg-slate-950/60 border-b border-slate-800/80 px-4 py-2.5 flex items-center gap-2 text-xs text-slate-400">
-          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>
-            <strong className="text-slate-200">Privacidad:</strong> Los números de contacto están protegidos y nunca se exhiben en la tabla pública.
-          </span>
-        </div>
+        {board?.source === 'local' && (
+          <div className="border-b border-line px-4 py-1.5 font-mono text-[11px] text-dim">
+            # tabla local{boardErr ? ` — ${boardErr}` : ' — sin conexión'}
+          </div>
+        )}
 
         {/* Filters */}
-        <div className="px-4 sm:px-6 pt-3 pb-2 flex items-center justify-between gap-2 border-b border-slate-800/50">
-          <div className="flex items-center gap-1.5 p-1 bg-slate-950/80 rounded-xl border border-slate-800">
+        <div className="px-4 pt-3 pb-2 border-b border-line/60">
+          <div className="flex items-center gap-1 p-1 bg-void rounded-md border border-line w-fit font-mono">
             <button
               onClick={() => {
                 sound.playClick();
                 setFilter('all');
               }}
-              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-                filter === 'all'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+              className={filterBtn(filter === 'all')}
             >
-              Todos ({entries.length})
+              todos ({entries.length})
             </button>
             <button
               onClick={() => {
                 sound.playClick();
                 setFilter('completed');
               }}
-              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-                filter === 'completed'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+              className={filterBtn(filter === 'completed')}
             >
-              16/16 Completados ({entries.filter((e) => e.completed).length})
+              15/15 ({entries.filter((e) => e.completed).length})
             </button>
             <button
               onClick={() => {
                 sound.playClick();
                 setFilter('uncompleted');
               }}
-              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-                filter === 'uncompleted'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+              className={filterBtn(filter === 'uncompleted')}
             >
-              No completados
+              resto
             </button>
           </div>
         </div>
 
-        {/* Table Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-          {filteredEntries.length === 0 ? (
-            <div className="text-center py-12 text-slate-500 text-sm">
-              No hay partidas registradas bajo este filtro.
+        {/* Table */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {!board ? (
+            <div className="text-center py-12 font-mono text-xs text-dim">
+              # cargando tabla…
+            </div>
+          ) : filteredEntries.length === 0 ? (
+            <div className="text-center py-12 font-mono text-xs text-dim">
+              # sin registros con este filtro.
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm border-separate border-spacing-y-1.5">
+              <table className="w-full text-left font-mono text-xs sm:text-sm">
                 <thead>
-                  <tr className="text-[11px] font-semibold uppercase text-slate-400 border-b border-slate-800 tracking-wider">
-                    <th className="py-2 px-3 w-16">Pos.</th>
-                    <th className="py-2 px-3">Jugador</th>
-                    <th className="py-2 px-3 text-center">Ronda</th>
-                    <th className="py-2 px-3 text-center">Vidas Restantes</th>
-                    <th className="py-2 px-3 text-right">Tiempo</th>
+                  <tr className="text-dim border-b border-line">
+                    <th className="py-2 px-3 font-normal w-14">pos.</th>
+                    <th className="py-2 px-3 font-normal">jugador</th>
+                    <th className="py-2 px-3 font-normal text-center">ronda</th>
+                    <th className="py-2 px-3 font-normal text-center">vidas</th>
+                    <th className="py-2 px-3 font-normal text-right">tiempo</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="tabular-nums">
                   {filteredEntries.map((entry, index) => {
                     const position = index + 1;
                     const isPodium = position <= 3;
@@ -138,80 +145,44 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                     return (
                       <tr
                         key={entry.id || index}
-                        className={`rounded-xl transition-colors ${
+                        className={`border-b border-line/50 transition-colors ${
                           isCurrent
-                            ? 'bg-indigo-950/60 border border-indigo-500/40 text-indigo-100 font-semibold'
-                            : 'bg-slate-950/40 hover:bg-slate-800/40 text-slate-200'
+                            ? 'bg-signal/5 text-ink'
+                            : 'text-ink hover:bg-void/60'
                         }`}
                       >
-                        {/* Position */}
-                        <td className="py-2.5 px-3 rounded-l-xl">
-                          <div className="flex items-center gap-1.5">
-                            {position === 1 && (
-                              <Medal className="w-4 h-4 text-amber-400 shrink-0" />
-                            )}
-                            {position === 2 && (
-                              <Medal className="w-4 h-4 text-slate-300 shrink-0" />
-                            )}
-                            {position === 3 && (
-                              <Medal className="w-4 h-4 text-amber-600 shrink-0" />
-                            )}
-                            <span
-                              className={`font-mono font-bold tabular-nums ${
-                                isPodium ? 'text-amber-400' : 'text-slate-400'
-                              }`}
-                            >
-                              {position}
-                            </span>
-                          </div>
+                        <td className="py-2.5 px-3">
+                          <span className={`font-bold ${isPodium ? 'text-signal' : 'text-dim'}`}>
+                            {String(position).padStart(2, '0')}
+                          </span>
                         </td>
-
-                        {/* Player name */}
-                        <td className="py-2.5 px-3 font-medium">
-                          <div className="flex items-center gap-2">
-                            <span>{entry.username}</span>
+                        <td className="py-2.5 px-3">
+                          <span className="flex items-center gap-2">
+                            {entry.username}
                             {isCurrent && (
-                              <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.2 rounded-md font-semibold">
-                                Tú
+                              <span className="text-[10px] border border-signal/50 text-signal px-1.5 py-px rounded font-bold">
+                                tú
                               </span>
                             )}
                             {entry.completed && (
-                              <span title="16/16 completado" className="inline-flex items-center">
-                                <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                              </span>
+                              <Check className="w-3.5 h-3.5 text-ok shrink-0" />
                             )}
-                          </div>
-                        </td>
-
-                        {/* Round */}
-                        <td className="py-2.5 px-3 text-center font-mono font-semibold">
-                          <span
-                            className={
-                              entry.completed ? 'text-emerald-400' : 'text-slate-300'
-                            }
-                          >
-                            {entry.maxRound}/{entry.totalRounds}
                           </span>
                         </td>
-
-                        {/* Lives remaining */}
-                        <td className="py-2.5 px-3 text-center">
-                          <div className="inline-flex items-center gap-1">
-                            {entry.livesRemaining > 0 ? (
-                              <span className="font-mono font-bold text-rose-400 flex items-center gap-1">
-                                <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500" />
-                                {entry.livesRemaining}
-                              </span>
-                            ) : (
-                              <span className="text-slate-500 font-mono text-xs">
-                                0
-                              </span>
-                            )}
-                          </div>
+                        <td className={`py-2.5 px-3 text-center font-bold ${entry.completed ? 'text-ok' : ''}`}>
+                          {entry.maxRound}/{entry.totalRounds}
                         </td>
-
-                        {/* Time */}
-                        <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums text-slate-100 rounded-r-xl">
+                        <td className="py-2.5 px-3 text-center">
+                          {entry.livesRemaining > 0 ? (
+                            <span className="inline-flex items-center gap-1 font-bold">
+                              <Heart className="w-3.5 h-3.5 fill-signal text-signal" />
+                              {entry.livesRemaining}
+                            </span>
+                          ) : (
+                            <span className="text-dim">0</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-bold">
                           {entry.totalTimeFormatted}
                         </td>
                       </tr>
@@ -223,19 +194,16 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
-          <span className="text-xs text-slate-400">
-            Criterio: Completados por vidas y tiempo; no completados por ronda máxima.
-          </span>
+        {/* Footer */}
+        <div className="px-4 py-3 border-t border-line bg-void/60 flex items-center justify-end">
           <button
             onClick={() => {
               sound.playClick();
               onClose();
             }}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+            className="px-4 py-1.5 bg-void text-dim hover:text-ink border border-line hover:border-dim/60 rounded-md font-mono text-xs font-bold cursor-pointer transition-colors shrink-0"
           >
-            Cerrar
+            cerrar
           </button>
         </div>
       </div>

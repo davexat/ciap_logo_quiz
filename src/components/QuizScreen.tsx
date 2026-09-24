@@ -10,160 +10,245 @@ interface QuizScreenProps {
   questions: Question[];
   currentRoundIndex: number;
   lives: number;
-  remainingSeconds: number;
-  onAnswerCorrect: () => void;
-  onAnswerIncorrect: (lastLostIndex: number) => void;
-  onTimeOut: () => void;
+  wildcardsLeft: number;
+  onUseWildcard: () => boolean;
+  onAnswerCorrect: (timeSpent: number) => void;
+  onAnswerIncorrect: (lastLostIndex: number, timeSpent: number) => void;
   onQuit: () => void;
 }
+
+const KEY_TO_OPTION: Record<string, number> = {
+  a: 0, b: 1, c: 2, d: 3,
+  '1': 0, '2': 1, '3': 2, '4': 3
+};
+
+const LEVEL_NAMES: Record<Question['level'], string> = {
+  easy: 'fácil',
+  medium: 'medio',
+  hard: 'difícil'
+};
 
 export const QuizScreen: React.FC<QuizScreenProps> = ({
   questions,
   currentRoundIndex,
   lives,
-  remainingSeconds,
+  wildcardsLeft,
+  onUseWildcard,
   onAnswerCorrect,
   onAnswerIncorrect,
-  onTimeOut,
   onQuit
 }) => {
   const currentQuestion = questions[currentRoundIndex];
-  const totalQuestions = questions.length;
+  const timeLimit = currentQuestion?.timeLimit ?? 10;
 
   // Selection & Feedback state for current question
   const [selectedLanguage, setSelectedLanguage] = useState<Language | null>(null);
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
   const [lastLostLifeIndex, setLastLostLifeIndex] = useState<number | null>(null);
-  const timerExpiredReportedRef = useRef(false);
+  const [timedOut, setTimedOut] = useState<boolean>(false);
+  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
 
-  // Monitor timer timeout
+  // Refs mirror the per-question clock (interval-safe, no stale closures)
+  const secondsRef = useRef(timeLimit);
+  const busyRef = useRef(false);
+  const expiredRef = useRef(false);
+  const [secondsLeft, setSecondsLeft] = useState(timeLimit);
+
+  // Latest callbacks for the interval (App handlers change identity per render)
+  const cbRef = useRef({ onAnswerCorrect, onAnswerIncorrect });
+  cbRef.current = { onAnswerCorrect, onAnswerIncorrect };
+
+  // Per-question setup: reset clock and reveal state
   useEffect(() => {
-    if (remainingSeconds <= 0 && !timerExpiredReportedRef.current) {
-      timerExpiredReportedRef.current = true;
-      onTimeOut();
-    }
-  }, [remainingSeconds, onTimeOut]);
+    busyRef.current = false;
+    expiredRef.current = false;
+    secondsRef.current = timeLimit;
+    setSecondsLeft(timeLimit);
+    setSelectedLanguage(null);
+    setIsTransitioning(false);
+    setLastLostLifeIndex(null);
+    setTimedOut(false);
+    setHiddenIds([]);
+
+    const id = window.setInterval(() => {
+      if (busyRef.current) return;
+      secondsRef.current -= 1;
+      setSecondsLeft(Math.max(0, secondsRef.current));
+      if (secondsRef.current <= 0 && !expiredRef.current) {
+        expiredRef.current = true;
+        busyRef.current = true;
+        handleTimeout();
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRoundIndex]);
+
+  // Timeout counts as a wrong answer: reveal correct, lose a life, move on
+  const handleTimeout = () => {
+    setTimedOut(true);
+    setIsTransitioning(true);
+    sound.playIncorrect();
+    setTimeout(() => {
+      cbRef.current.onAnswerIncorrect(lives - 1, timeLimit);
+    }, 950);
+  };
 
   // Handle player choice
   const handleSelectOption = (option: Language) => {
-    if (isTransitioning || remainingSeconds <= 0 || lives <= 0) return;
+    if (busyRef.current || expiredRef.current) return;
+    busyRef.current = true;
 
     setIsTransitioning(true);
     setSelectedLanguage(option);
 
+    const timeSpent = Math.max(1, timeLimit - secondsRef.current);
     const isCorrect = option.id === currentQuestion.targetLanguage.id;
 
     if (isCorrect) {
       sound.playCorrect();
       setTimeout(() => {
-        setSelectedLanguage(null);
-        setIsTransitioning(false);
-        onAnswerCorrect();
+        cbRef.current.onAnswerCorrect(timeSpent);
       }, 700);
     } else {
-      const lostIndex = lives - 1; // 0-based index of heart being lost
-      setLastLostLifeIndex(lostIndex);
+      setLastLostLifeIndex(lives - 1); // 0-based index of heart being lost
       sound.playIncorrect();
-
       setTimeout(() => {
-        setLastLostLifeIndex(null);
-        setSelectedLanguage(null);
-        setIsTransitioning(false);
-        onAnswerIncorrect(lostIndex);
+        cbRef.current.onAnswerIncorrect(lives - 1, timeSpent);
       }, 950);
     }
   };
+
+  // 50:50 wildcard: hide 2 wrong options, once per question
+  const handleWildcard = () => {
+    if (busyRef.current || expiredRef.current || hiddenIds.length > 0 || wildcardsLeft <= 0) return;
+    if (!onUseWildcard()) return;
+    const wrong = currentQuestion.options.filter(o => o.id !== currentQuestion.targetLanguage.id);
+    const picked = [...wrong].sort(() => Math.random() - 0.5).slice(0, 2).map(o => o.id);
+    setHiddenIds(picked);
+  };
+
+  // Keyboard answers: A/B/C/D or 1-4, W for wildcard (no dep array: always fresh)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (busyRef.current) return;
+      const k = e.key.toLowerCase();
+      if (k === 'w') {
+        handleWildcard();
+        return;
+      }
+      const idx = KEY_TO_OPTION[k];
+      if (idx === undefined) return;
+      const opt = currentQuestion?.options[idx];
+      if (opt && !hiddenIds.includes(opt.id)) handleSelectOption(opt);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   if (!currentQuestion) {
     return null;
   }
 
-  const isUrgent = remainingSeconds <= 20;
+  const isUrgent = secondsLeft <= 3;
+  const levelQuestions = questions.filter(q => q.level === currentQuestion.level);
+  const indexInLevel = levelQuestions.findIndex(q => q.id === currentQuestion.id) + 1;
 
   return (
-    <div className="w-full flex-1 flex flex-col justify-between max-w-4xl mx-auto px-4 py-4 sm:py-6">
-      {/* Top HUD: Round counter, Lives, and Quick Timer */}
-      <div className="w-full bg-slate-900/80 border border-slate-800/90 rounded-2xl p-3 sm:p-4 mb-4 sm:mb-6 shadow-xl flex items-center justify-between gap-2 sm:gap-4">
-        {/* Round Progress */}
-        <div className="flex items-center gap-2">
-          <div className="flex flex-col">
-            <span className="text-[11px] uppercase font-bold tracking-wider text-indigo-400">
-              Ronda
-            </span>
-            <div className="flex items-baseline gap-1">
-              <span className="text-xl sm:text-2xl font-black text-white font-mono tabular-nums">
-                {currentRoundIndex + 1}
-              </span>
-              <span className="text-xs sm:text-sm text-slate-400 font-mono">
-                / {totalQuestions}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Center: Lives */}
-        <LivesDisplay lives={lives} maxLives={3} lastLostIndex={lastLostLifeIndex} />
-
-        {/* Right: Quick Timer readout */}
-        <div className="flex flex-col items-end">
-          <span className="text-[11px] uppercase font-bold tracking-wider text-slate-400">
-            Cronómetro
+    <div className="w-full flex-1 flex flex-col max-w-4xl mx-auto px-4 py-4 sm:py-6">
+      <div className="border border-line bg-panel rounded-lg overflow-hidden flex-1 flex flex-col">
+        {/* Window title bar */}
+        <div className="flex items-center gap-1.5 px-3.5 py-2 border-b border-line bg-void/60 font-mono text-xs">
+          <span className="w-2.5 h-2.5 rounded-full bg-line" />
+          <span className="w-2.5 h-2.5 rounded-full bg-line" />
+          <span className="w-2.5 h-2.5 rounded-full bg-signal/70" />
+          <span className="text-dim ml-2 tabular-nums">
+            nivel_{currentQuestion.level}.sh — pregunta {String(currentRoundIndex + 1).padStart(2, '0')}
           </span>
-          <div
-            className={`text-lg sm:text-2xl font-black font-mono tabular-nums ${
-              isUrgent ? 'text-rose-400 animate-pulse' : 'text-slate-100'
-            }`}
+          <button
+            onClick={() => {
+              sound.playClick();
+              onQuit();
+            }}
+            className="ml-auto text-dim hover:text-bad font-mono text-xs transition-colors cursor-pointer"
+            title="Abandonar partida"
           >
-            ⏱ {formatSecondsToMMSS(remainingSeconds)}
-          </div>
+            [salir]
+          </button>
         </div>
-      </div>
 
-      {/* Main Question Card */}
-      <div className="w-full flex-1 flex flex-col items-center justify-center mb-6">
-        <div className="w-full text-center mb-5 sm:mb-6">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-            Pregunta {currentRoundIndex + 1} de {totalQuestions}
-          </div>
-          <h2 className="text-xl sm:text-3xl font-extrabold text-white text-balance">
-            ¿Cuál de estos logos corresponde a{' '}
-            <span
-              className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-sky-400 to-teal-300 underline decoration-indigo-500/40 underline-offset-4"
-            >
-              {currentQuestion.targetLanguage.displayName}
-            </span>
-            ?
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Selecciona la opción correcta antes de que se agote el tiempo.
+        {/* Statusline */}
+        <div className="flex items-center justify-between gap-2 sm:gap-3 px-3.5 py-2 border-b border-line font-mono text-xs tabular-nums">
+          <span className="text-dim shrink-0">
+            <span className="text-signal font-bold">{LEVEL_NAMES[currentQuestion.level]}</span>
+            {' '}{indexInLevel}/{levelQuestions.length}
+          </span>
+          <LivesDisplay lives={lives} maxLives={3} lastLostIndex={lastLostLifeIndex} />
+          <span className={`shrink-0 ${isUrgent ? 'text-bad font-bold' : 'text-ink'}`}>
+            {formatSecondsToMMSS(secondsLeft)}
+          </span>
+        </div>
+
+        {/* Question body */}
+        <div className="p-4 sm:p-6 flex-1">
+          <p className="font-mono text-base sm:text-xl text-ink leading-snug">
+            <span className="text-signal font-bold">$</span> ¿cuál de estos logos es{' '}
+            <span className="text-signal font-bold">{currentQuestion.targetLanguage.displayName}</span>?
           </p>
-        </div>
+          <p className="font-mono text-xs text-dim mt-1.5">
+            # W para el comodín
+          </p>
 
-        {/* 4 Logo Choices Grid */}
-        <div className="w-full grid grid-cols-2 gap-3 sm:gap-5 max-w-2xl">
-          {currentQuestion.options.map((option, idx) => {
-            const isSelected = selectedLanguage?.id === option.id;
-            const isCorrectOption = option.id === currentQuestion.targetLanguage.id;
+          <div className="w-full grid grid-cols-2 gap-3 mt-5 max-w-2xl mx-auto">
+            {currentQuestion.options.map((option, idx) => {
+              if (hiddenIds.includes(option.id)) {
+                return <div key={option.id} aria-hidden className="rounded-md border border-line/40 bg-void/40 min-h-[160px] sm:min-h-[185px]" />;
+              }
+              const isSelected = selectedLanguage?.id === option.id;
+              const isCorrectOption = option.id === currentQuestion.targetLanguage.id;
 
-            return (
-              <LogoCard
-                key={option.id}
-                language={option}
-                index={idx}
-                isSelected={isSelected}
-                isCorrectOption={isCorrectOption}
-                hasAnswered={isTransitioning}
-                onSelect={handleSelectOption}
-                disabled={isTransitioning}
-              />
-            );
-          })}
+              return (
+                <LogoCard
+                  key={option.id}
+                  language={option}
+                  index={idx}
+                  isSelected={isSelected}
+                  isCorrectOption={isCorrectOption}
+                  hasAnswered={isTransitioning}
+                  onSelect={handleSelectOption}
+                  disabled={isTransitioning}
+                />
+              );
+            })}
+          </div>
+
+          {/* Wildcard */}
+          <div className="mt-4 max-w-2xl mx-auto">
+            <button
+              onClick={handleWildcard}
+              disabled={isTransitioning || hiddenIds.length > 0 || wildcardsLeft <= 0}
+              title="Elimina 2 opciones incorrectas (tecla W)"
+              className={`w-full py-2.5 px-4 rounded-md font-mono font-bold text-xs border transition-all flex items-center justify-center gap-2 cursor-pointer tabular-nums ${
+                isTransitioning || hiddenIds.length > 0 || wildcardsLeft <= 0
+                  ? 'border-line text-dim/60 cursor-not-allowed'
+                  : 'border-signal/60 text-signal hover:bg-signal/10'
+              }`}
+            >
+              <span>[comodín 50:50 · quedan {wildcardsLeft}]</span>
+            </button>
+            {timedOut && (
+              <p className="mt-2 font-mono text-xs text-bad">$ tiempo agotado — cuenta como fallo.</p>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Bottom Full-Width Timer Depletion Bar */}
+      {/* Bottom per-question depletion strip */}
       <div className="fixed bottom-0 left-0 right-0 z-30">
-        <TimerBar remainingSeconds={remainingSeconds} totalSeconds={90} />
+        <TimerBar secondsLeft={secondsLeft} totalSeconds={timeLimit} />
       </div>
     </div>
   );

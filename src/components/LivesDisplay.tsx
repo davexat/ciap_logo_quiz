@@ -1,5 +1,5 @@
 import React from 'react';
-import { Heart } from 'lucide-react';
+import { Heart, X } from 'lucide-react';
 
 interface LivesDisplayProps {
   lives: number; // 0, 1, 2, or 3
@@ -13,11 +13,9 @@ export const LivesDisplay: React.FC<LivesDisplayProps> = ({
   lastLostIndex = null
 }) => {
   return (
-    <div className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 bg-slate-900/90 border border-slate-800 rounded-xl shadow-inner">
-      <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1 hidden sm:inline">
-        Vidas:
-      </span>
-      <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 font-mono text-xs" aria-label={`${lives} vidas`}>
+      <span className="text-dim">vidas</span>
+      <div className="flex items-center gap-1">
         {Array.from({ length: maxLives }).map((_, index) => {
           const isAlive = index < lives;
           const wasJustLost = lastLostIndex === index;
@@ -25,22 +23,18 @@ export const LivesDisplay: React.FC<LivesDisplayProps> = ({
           return (
             <div
               key={index}
-              className={`relative transition-all duration-300 transform ${
-                wasJustLost ? 'animate-bounce scale-125' : ''
+              className={`relative transition-all duration-300 ${
+                wasJustLost ? 'animate-bounce' : ''
               }`}
             >
               {isAlive ? (
-                <Heart
-                  className="w-5 h-5 sm:w-6 sm:h-6 fill-rose-500 text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)] transition-transform duration-200 hover:scale-110"
-                />
+                <Heart className="w-4 h-4 fill-signal text-signal" />
               ) : (
                 <div className="relative">
-                  <Heart
-                    className="w-5 h-5 sm:w-6 sm:h-6 text-slate-700 fill-slate-800/80 stroke-slate-600 opacity-60"
-                  />
+                  <Heart className="w-4 h-4 text-line" />
                   {wasJustLost && (
-                    <span className="absolute -top-1 -right-1 text-xs select-none animate-ping">
-                      💔
+                    <span className="absolute -top-1 -right-1 select-none">
+                      <X className="w-3 h-3 text-bad animate-ping" />
                     </span>
                   )}
                 </div>
