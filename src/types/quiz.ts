@@ -4,7 +4,7 @@ export interface Language {
   id: string;
   name: string;
   displayName: string;
-  logo: string; // ponytail: path placeholder for svg file in src/data/logos, e.g. src/data/logos/python.svg
+  logo: string; // ponytail: public asset served at /logos/<id>.svg, e.g. /logos/python.svg
   difficulty: Difficulty; // recognition tier: easy (mainstream) / medium / hard (obscure)
 }
 
